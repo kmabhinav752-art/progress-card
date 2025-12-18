@@ -120,5 +120,15 @@ style.innerHTML = `
 `;
 document.head.appendChild(style);
 
-// Initialize App
-window.app = new App();
+// Initialize App after Data is loaded
+(async () => {
+    // Wait for Firebase
+    console.log("Waiting for DB...");
+    await window.db.init();
+
+    // Remove loading screen if still there
+    const loader = document.querySelector('.loading-screen');
+    if (loader) loader.style.display = 'none';
+
+    window.app = new App();
+})();
