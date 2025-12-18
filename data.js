@@ -1,16 +1,73 @@
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, getDocs, setDoc, doc, deleteDoc } from "firebase/firestore";
+
+const firebaseConfig = {
+    apiKey: "AIzaSyBKuDKJFy2U0_pozQKO_KuEVsYEm771VEY",
+    authDomain: "progress-card111.firebaseapp.com",
+    projectId: "progress-card111",
+    storageBucket: "progress-card111.firebasestorage.app",
+    messagingSenderId: "531985157468",
+    appId: "1:531985157468:web:c5edb24b8c2f06efe58599",
+    measurementId: "G-Y6E1TYGFL1"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
 class DataManager {
     constructor() {
-        this.init();
+        this.db = db;
+        this.cache = {
+            users: [],
+            departments: [],
+            courses: [],
+            subjects: [],
+            allocations: [],
+            results: [],
+            attendance: []
+        };
+        this.initialized = false;
     }
 
-    init() {
-        if (!localStorage.getItem('app_initialized')) {
-            this.seedData();
+    async init() {
+        if (this.initialized) return;
+        console.log('Initializing Firebase DataManager...');
+
+        try {
+            await Promise.all([
+                this.loadCollection('users'),
+                this.loadCollection('departments'),
+                this.loadCollection('courses'),
+                this.loadCollection('subjects'),
+                this.loadCollection('allocations'),
+                this.loadCollection('results'),
+                this.loadCollection('attendance')
+            ]);
+
+            // Seed if empty
+            if (this.cache.users.length === 0) {
+                await this.seedData();
+            }
+            this.initialized = true;
+            console.log('Firebase Initialization Complete');
+        } catch (error) {
+            console.error("Firebase Init Failed:", error);
+            // Fallback? Or just throw.
+            alert("Failed to connect to database. Please check your internet connection.");
         }
     }
 
-    seedData() {
-        console.log('Seeding initial data...');
+    async loadCollection(key) {
+        const querySnapshot = await getDocs(collection(this.db, key));
+        this.cache[key] = [];
+        querySnapshot.forEach((doc) => {
+            this.cache[key].push(doc.data());
+        });
+    }
+
+    async seedData() {
+        console.log('Seeding initial data to Firebase...');
 
         const users = [
             { id: 'admin1', name: 'Admin User', username: 'admin', password: '123', role: 'admin' },
@@ -34,33 +91,32 @@ class DataManager {
             { id: 'sub2', code: 'MA101', name: 'Calculus', credit: 3, semester: 1, courseId: 'course1' }
         ];
 
-        // Allocations: Which staff teaches which subject
         const allocations = [
             { id: 'alloc1', staffId: 'staff1', subjectId: 'sub1' }
         ];
 
-        // Results/Marks (Internal & External)
-        const results = [];
-
-        // Attendance Records
         const attendance = [
             { id: 'att1', studentId: 'student1', subjectId: 'sub1', total: 40, attended: 35 }
         ];
 
-        localStorage.setItem('users', JSON.stringify(users));
-        localStorage.setItem('departments', JSON.stringify(departments));
-        localStorage.setItem('courses', JSON.stringify(courses));
-        localStorage.setItem('subjects', JSON.stringify(subjects));
-        localStorage.setItem('allocations', JSON.stringify(allocations));
-        localStorage.setItem('results', JSON.stringify(results));
-        localStorage.setItem('attendance', JSON.stringify(attendance));
+        // Helper to batch push
+        const pushAll = async (key, items) => {
+            for (const item of items) {
+                await this.save(key, item);
+            }
+        };
 
-        localStorage.setItem('app_initialized', 'true');
+        await pushAll('users', users);
+        await pushAll('departments', departments);
+        await pushAll('courses', courses);
+        await pushAll('subjects', subjects);
+        await pushAll('allocations', allocations);
+        await pushAll('attendance', attendance);
     }
 
-    // --- GENERIC GETTERS ---
+    // --- GENERIC GETTERS (SYNC via CACHE) ---
     getAll(key) {
-        return JSON.parse(localStorage.getItem(key)) || [];
+        return this.cache[key] || [];
     }
 
     getById(key, id) {
@@ -74,17 +130,45 @@ class DataManager {
         return users.find(u => u.username === username && u.password === password);
     }
 
-    save(key, item) {
-        const items = this.getAll(key);
-        const index = items.findIndex(i => i.id === item.id);
-        if (index >= 0) {
-            items[index] = item;
-        } else {
-            items.push(item);
+    // --- WRITE OPERATIONS (ASYNC + OPTIMISTIC) ---
+    async save(key, item) {
+        if (!item.id) {
+            console.error("Item has no ID", item);
+            return;
         }
-        localStorage.setItem(key, JSON.stringify(items));
+
+        // Optimistic Cache Update
+        const list = this.cache[key];
+        const index = list.findIndex(i => i.id === item.id);
+        if (index >= 0) {
+            list[index] = item;
+        } else {
+            list.push(item);
+        }
+
+        // Firebase Update
+        try {
+            await setDoc(doc(this.db, key, item.id), item);
+        } catch (e) {
+            console.error(`Error saving to ${key}:`, e);
+            // Revert cache if critical? For now we assume success
+            // In a real app we'd rollback
+        }
+    }
+
+    async delete(key, id) {
+        // Optimistic Cache Update
+        const list = this.cache[key];
+        this.cache[key] = list.filter(i => i.id !== id);
+
+        // Firebase Update
+        try {
+            await deleteDoc(doc(this.db, key, id));
+        } catch (e) {
+            console.error(`Error deleting from ${key}:`, e);
+        }
     }
 }
 
-// Global Instance
+// Global Instance attached to window
 window.db = new DataManager();
